@@ -67,7 +67,7 @@ static NSArray *kamusiBindingKeys = nil;
     // swizzle methods
     method_exchangeImplementations(class_getInstanceMethod(self, @selector(loadNibNamed:owner:topLevelObjects:)), class_getInstanceMethod(self, @selector(kamusiLoadNibNamed:owner:topLevelObjects:)));
     method_exchangeImplementations(class_getInstanceMethod(self, @selector(localizedStringForKey:value:table:)), class_getInstanceMethod(self, @selector(kamusiLocalizedStringForKey:value:table:)));
-    
+
     kamusiBindingKeys = [[NSArray alloc] initWithObjects:
                          NSMultipleValuesPlaceholderBindingOption,
                          NSNoSelectionPlaceholderBindingOption,
@@ -81,29 +81,29 @@ static NSArray *kamusiBindingKeys = nil;
 + (NSBundle*) kamusiBundle
 {
     NSString* preferredLanguage = [[[NSBundle mainBundle] preferredLocalizations] firstObject];
-    
+
     NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:@"KamusiTranslations"];
     if (![[self class] _csIsKamusiBundleCompatibleAtPath:kamusiPath])
         return nil;
 
     NSBundle* kamusiBundle = [NSBundle bundleWithPath:kamusiPath];
-    
+
     NSArray<NSString*>* availableKamusiLanguageCodes = [kamusiBundle localizations];
     NSArray<NSString*>* preferredUserLocaleIdentifiers = [[NSUserDefaults standardUserDefaults] valueForKey:@"AppleLanguages"];
-    
+
     for(NSString* aLocaleIdentifier in preferredUserLocaleIdentifiers)
     {
         NSLocale* aLocale = [NSLocale localeWithLocaleIdentifier:aLocaleIdentifier];
-        
+
         if([availableKamusiLanguageCodes containsObject:aLocale.languageCode])
         {
             preferredLanguage = aLocale.languageCode;
             break;
         }
     }
-    
+
     NSString* localizationPath = [kamusiBundle pathForResource:preferredLanguage ofType:@"lproj"];
-    
+
     BOOL isDir = NO;
     if([[NSFileManager defaultManager] fileExistsAtPath:localizationPath isDirectory:&isDir] && isDir)
         return [NSBundle bundleWithPath:localizationPath];
@@ -115,17 +115,17 @@ static NSArray *kamusiBindingKeys = nil;
 {
     if (![key length])
         return [self kamusiLocalizedStringForKey:key value:value table:tableName];  // use default behavior
-    
+
     // try with Transifex directory first
     NSBundle *kamusiBundle = [NSBundle kamusiBundle];
     NSString *localizedString = nil;
     if (kamusiBundle)
         localizedString = [kamusiBundle kamusiLocalizedStringForKey:key value:value table:tableName];
-    
+
     // backup: try with application's main bundle
     if(!localizedString || localizedString == value || localizedString == key)
         localizedString = [self kamusiLocalizedStringForKey:key value:value table:tableName];
-    
+
     if (localizedString != value) {
         return localizedString;
     } else {
@@ -140,21 +140,21 @@ static NSArray *kamusiBindingKeys = nil;
         return [self kamusiLoadNibNamed:nibName owner:owner topLevelObjects:topLevelObjects];   // original implementation
 
     NSString *localizedStringsTablePath_Bundle = [[NSBundle mainBundle] pathForResource:nibName ofType:@"strings"];
-    
+
     NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:@"KamusiTranslations"];
     NSString *localizedStringsTablePath_Kamusi = nil;
     if ([[self class] _csIsKamusiBundleCompatibleAtPath:kamusiPath])
         localizedStringsTablePath_Kamusi = [[NSBundle bundleWithPath:kamusiPath] pathForResource:nibName ofType:@"strings"];
-    
+
     if ((localizedStringsTablePath_Bundle || localizedStringsTablePath_Kamusi) && topLevelObjects) {
-        
+
         NSNib *nib = [[NSNib alloc] initWithNibNamed:nibName bundle:self];
-        
+
         BOOL success = [nib instantiateWithOwner:owner topLevelObjects:topLevelObjects];
         [[self class] _csLocalizeStringsInObject:*topLevelObjects table:nibName];
-        
+
         return success;
-        
+
     } else {
         return [self kamusiLoadNibNamed:nibName owner:owner topLevelObjects:topLevelObjects];   // original implementation
     }
@@ -205,16 +205,16 @@ static NSArray *kamusiBindingKeys = nil;
 {
     if ([object isKindOfClass:[NSArray class]]) {
         NSArray *array = object;
-        
+
         for (id nibItem in array)
             [self _csLocalizeStringsInObject:nibItem table:table];
-		
+
     } else if ([object isKindOfClass:[NSCell class]]) {
         NSCell *cell = object;
-        
+
         if ([cell isKindOfClass:[NSActionCell class]]) {
             NSActionCell *actionCell = (NSActionCell *)cell;
-            
+
             if ([actionCell isKindOfClass:[NSButtonCell class]]) {
                 NSButtonCell *buttonCell = (NSButtonCell *)actionCell;
                 if ([buttonCell imagePosition] != NSImageOnly) {
@@ -241,41 +241,41 @@ static NSArray *kamusiBindingKeys = nil;
                 // [self _csLocalizeTitleOfObject:textFieldCell table:table];
                 [self _csLocalizeStringValueOfObject:textFieldCell table:table];
                 [self _csLocalizePlaceholderStringOfObject:textFieldCell table:table];
-				
+
             } else if ([actionCell type] == NSTextCellType) {
                 [self _csLocalizeTitleOfObject:actionCell table:table];
                 [self _csLocalizeStringValueOfObject:actionCell table:table];
             }
         }
-        
+
     } else if ([object isKindOfClass:[NSMenu class]]) {
         NSMenu *menu = object;
         [self _csLocalizeTitleOfObject:menu table:table];
-        
+
         [self _csLocalizeStringsInObject:[menu itemArray] table:table];
-        
+
     } else if ([object isKindOfClass:[NSMenuItem class]]) {
         NSMenuItem *menuItem = object;
         [self _csLocalizeTitleOfObject:menuItem table:table];
         [self _csLocalizeToolTipOfObject:menuItem table:table];
-        
+
         [self _csLocalizeStringsInObject:[menuItem submenu] table:table];
-        
+
     } else if ([object isKindOfClass:[NSView class]]) {
         NSView *view = object;
         [self _csLocalizeToolTipOfObject:view table:table];
-		
+
         if ([view isKindOfClass:[NSBox class]]) {
             NSBox *box = (NSBox *)view;
             [self _csLocalizeTitleOfObject:box table:table];
-            
+
         } else if ([view isKindOfClass:[NSControl class]]) {
             NSControl *control = (NSControl *)view;
-			
+
 			// Localize BINDINGS
 			if ([view isKindOfClass:[NSTextField class]] || [view isKindOfClass:[NSPathControl class]]) {
 				NSTextField *textField = (NSTextField *)control;
-				
+
 				// A text field can have more than one display pattern binding (displayPatternValue1, ...) but according to the Apple
 				// docs its sufficient to change the first one and the change will be rippled through to the other ones
 				if ([[textField exposedBindings] containsObject:@"displayPatternValue1"]) {
@@ -284,14 +284,14 @@ static NSArray *kamusiBindingKeys = nil;
 						// First get the unlocalized display pattern string from the bindings info and localize it
 						NSString *unlocalizedDisplayPattern = displayPatternInfo[NSOptionsKey][NSDisplayPatternBindingOption];
 						NSString *localizedDisplayPattern = [self _csLocalizedStringForString:unlocalizedDisplayPattern table:table];
-						
+
 						// To actually update the display pattern we need to re-create the bindings
 						NSMutableDictionary *localizedOptions = [displayPatternInfo[NSOptionsKey] mutableCopy];
 						localizedOptions[NSDisplayPatternBindingOption] = localizedDisplayPattern;
 						[textField bind:@"displayPatternValue1" toObject:displayPatternInfo[NSObservedObjectKey] withKeyPath:displayPatternInfo[NSObservedKeyPathKey] options:localizedOptions];
 					}
 				}
-                
+
                 NSDictionary *vb = nil;
                 if ((vb = [textField infoForBinding:@"value"]))
                 {
@@ -300,7 +300,7 @@ static NSArray *kamusiBindingKeys = nil;
                     {
                         if (lvb[bindingKey] == [NSNull null] || ![lvb[bindingKey] isKindOfClass:[NSString class]])
                             continue;
-                        
+
                         NSString *localizedBindingString = [self _csLocalizedStringForString:lvb[bindingKey] table:table];
                         if (localizedBindingString)
                             lvb[bindingKey] = localizedBindingString;
@@ -308,35 +308,35 @@ static NSArray *kamusiBindingKeys = nil;
                     [textField bind:@"value" toObject:vb[NSObservedObjectKey] withKeyPath:vb[NSObservedKeyPathKey] options:lvb];
                 }
 			}
-			
+
             if ([view isKindOfClass:[NSButton class]]) {
                 NSButton *button = (NSButton *)control;
-				
+
                 if ([button isKindOfClass:[NSPopUpButton class]]) {
                     NSPopUpButton *popUpButton = (NSPopUpButton *)button;
                     NSMenu *menu = [popUpButton menu];
-                    
+
                     [self _csLocalizeStringsInObject:[menu itemArray] table:table];
                 } else
                     [self _csLocalizeStringsInObject:[button cell] table:table];
-				
-                
+
+
             } else if ([view isKindOfClass:[NSMatrix class]]) {
                 NSMatrix *matrix = (NSMatrix *)control;
-                
+
                 NSArray *cells = [matrix cells];
                 [self _csLocalizeStringsInObject:cells table:table];
-                
+
                 for (NSCell *cell in cells) {
-                    
+
                     NSString *localizedCellToolTip = [self _csLocalizedStringForString:[matrix toolTipForCell:cell] table:table];
                     if (localizedCellToolTip)
                         [matrix setToolTip:localizedCellToolTip forCell:cell];
                 }
-                
+
             } else if ([view isKindOfClass:[NSSegmentedControl class]]) {
                 NSSegmentedControl *segmentedControl = (NSSegmentedControl *)control;
-                
+
                 NSUInteger segmentIndex, segmentCount = [segmentedControl segmentCount];
                 for (segmentIndex = 0; segmentIndex < segmentCount; segmentIndex++) {
                     NSString *localizedSegmentLabel = [self _csLocalizedStringForString:[segmentedControl labelForSegment:segmentIndex] table:table];
@@ -345,10 +345,10 @@ static NSArray *kamusiBindingKeys = nil;
                     NSString *localizedSegmentTooltip = [self _csLocalizedStringForString:[[segmentedControl cell] toolTipForSegment:segmentIndex] table:table];
                     if (localizedSegmentTooltip)
                         [[segmentedControl cell] setToolTip:localizedSegmentTooltip forSegment:segmentIndex];
-                    
+
                     [self _csLocalizeStringsInObject:[segmentedControl menuForSegment:segmentIndex] table:table];
                 }
-                
+
             } else if ([object isKindOfClass:[NSTableView class]]) {   // table and outline views
 				NSTableView* tableView = (NSTableView*)view;
 				for (NSTableColumn *column in [tableView tableColumns]) {
@@ -368,21 +368,21 @@ static NSArray *kamusiBindingKeys = nil;
 			}
 			else
                 [self _csLocalizeStringsInObject:[control cell] table:table];
-			
+
         } else if ([object isKindOfClass:[NSTabView class]]) {
 			NSTabView *tabView = object;
 			[self _csLocalizeStringsInObject:[tabView tabViewItems] table:table];
 		}
-        
+
         if([view subviews])
             [self _csLocalizeStringsInObject:[view subviews] table:table];
-        
+
     } else if ([object isKindOfClass:[NSWindow class]]) {
         NSWindow *window = object;
         [self _csLocalizeTitleOfObject:window table:table];
-        
+
         [self _csLocalizeStringsInObject:[window contentView] table:table];
-        
+
     } else if ([object isKindOfClass:[NSTabViewItem class]]) {
 		NSTabViewItem *tabViewItem = object;
 		[self _csLocalizeLabelOfObject:object table:table];
@@ -397,16 +397,16 @@ static NSArray *kamusiBindingKeys = nil;
 {
     if (![string length])
         return nil;
-	
+
     static NSString *defaultValue = @"I AM THE DEFAULT VALUE";
-    
+
     // try with Transifex directory first
     NSString *localizedString = [[NSBundle kamusiBundle] localizedStringForKey:string value:defaultValue table:table];
-    
+
     // backup: try with application's main bundle
     if(localizedString == defaultValue)
         localizedString = [[NSBundle mainBundle] localizedStringForKey:string value:defaultValue table:table];
-    
+
     if (localizedString != defaultValue) {
         return localizedString;
     } else {
