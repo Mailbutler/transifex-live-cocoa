@@ -36,6 +36,11 @@
 
 #import "NSFileManager+DirectoryLocations.h"
 
+static NSString * const CSKamusiMetadataFileName = @"Metadata.plist";
+static NSString * const CSKamusiMetadataBundleIdentifierKey = @"BundleIdentifier";
+static NSString * const CSKamusiMetadataBundleVersionKey = @"BundleVersion";
+static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVersion";
+
 @interface NSBundle (CSKamusi_PRIVATE)
 + (void) _pullTranslationsFromTransifex:(NSDictionary*)transifexDict withCompletionHandler:(void (^)(BOOL success))completionHandler;
 @end
@@ -263,6 +268,26 @@
         }
     }
     
+    if (installed)
+    {
+        NSDictionary *mainInfo = [[NSBundle mainBundle] infoDictionary] ?: @{};
+        NSString *bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+        NSString *bundleVersion = mainInfo[@"CFBundleVersion"] ?: @"";
+        NSString *bundleShortVersion = mainInfo[@"CFBundleShortVersionString"] ?: @"";
+
+        NSDictionary *metadata = @{
+            CSKamusiMetadataBundleIdentifierKey: bundleIdentifier,
+            CSKamusiMetadataBundleVersionKey: bundleVersion,
+            CSKamusiMetadataBundleShortVersionKey: bundleShortVersion
+        };
+
+        NSString *metadataPath = [kamusiPath stringByAppendingPathComponent:CSKamusiMetadataFileName];
+        if (![metadata writeToFile:metadataPath atomically:YES])
+        {
+            NSLog(@"Warning: Could not write Kamusi translation metadata file to %@", metadataPath);
+        }
+    }
+
     return installed;
 }
 

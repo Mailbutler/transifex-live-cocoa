@@ -36,6 +36,11 @@
 
 #import <objc/runtime.h>
 
+static NSString * const CSKamusiMetadataFileName = @"Metadata.plist";
+static NSString * const CSKamusiMetadataBundleIdentifierKey = @"BundleIdentifier";
+static NSString * const CSKamusiMetadataBundleVersionKey = @"BundleVersion";
+static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVersion";
+
 @interface NSBundle (CSTranslation_Private)
 + (void)_csLocalizeStringsInObject:(id)object table:(NSString *)table;
 + (NSString *)_csLocalizedStringForString:(NSString *)string table:(NSString *)table;
@@ -48,6 +53,7 @@
 + (void)_csLocalizeLabelOfObject:(id)object table:(NSString *)table;
 
 + (NSBundle*) kamusiBundle;
++ (BOOL)_csIsKamusiBundleCompatibleAtPath:(NSString *)kamusiPath;
 @end
 
 static NSArray *kamusiBindingKeys = nil;
@@ -77,6 +83,9 @@ static NSArray *kamusiBindingKeys = nil;
     NSString* preferredLanguage = [[[NSBundle mainBundle] preferredLocalizations] firstObject];
     
     NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:@"KamusiTranslations"];
+    if (![[self class] _csIsKamusiBundleCompatibleAtPath:kamusiPath])
+        return nil;
+
     NSBundle* kamusiBundle = [NSBundle bundleWithPath:kamusiPath];
     
     NSArray<NSString*>* availableKamusiLanguageCodes = [kamusiBundle localizations];
@@ -108,7 +117,10 @@ static NSArray *kamusiBindingKeys = nil;
         return [self kamusiLocalizedStringForKey:key value:value table:tableName];  // use default behavior
     
     // try with Transifex directory first
-    NSString *localizedString = [[NSBundle kamusiBundle] kamusiLocalizedStringForKey:key value:value table:tableName];
+    NSBundle *kamusiBundle = [NSBundle kamusiBundle];
+    NSString *localizedString = nil;
+    if (kamusiBundle)
+        localizedString = [kamusiBundle kamusiLocalizedStringForKey:key value:value table:tableName];
     
     // backup: try with application's main bundle
     if(!localizedString || localizedString == value || localizedString == key)
@@ -130,7 +142,9 @@ static NSArray *kamusiBindingKeys = nil;
     NSString *localizedStringsTablePath_Bundle = [[NSBundle mainBundle] pathForResource:nibName ofType:@"strings"];
     
     NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:@"KamusiTranslations"];
-    NSString *localizedStringsTablePath_Kamusi = [[NSBundle bundleWithPath:kamusiPath] pathForResource:nibName ofType:@"strings"];
+    NSString *localizedStringsTablePath_Kamusi = nil;
+    if ([[self class] _csIsKamusiBundleCompatibleAtPath:kamusiPath])
+        localizedStringsTablePath_Kamusi = [[NSBundle bundleWithPath:kamusiPath] pathForResource:nibName ofType:@"strings"];
     
     if ((localizedStringsTablePath_Bundle || localizedStringsTablePath_Kamusi) && topLevelObjects) {
         
@@ -144,6 +158,45 @@ static NSArray *kamusiBindingKeys = nil;
     } else {
         return [self kamusiLoadNibNamed:nibName owner:owner topLevelObjects:topLevelObjects];   // original implementation
     }
+}
+
++ (BOOL)_csIsKamusiBundleCompatibleAtPath:(NSString *)kamusiPath
+{
+    BOOL isDir = NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:kamusiPath isDirectory:&isDir] || !isDir)
+        return NO;
+
+    NSString *metadataPath = [kamusiPath stringByAppendingPathComponent:CSKamusiMetadataFileName];
+    NSDictionary *metadata = [NSDictionary dictionaryWithContentsOfFile:metadataPath];
+    if (![metadata isKindOfClass:[NSDictionary class]])
+        return NO;
+
+    NSDictionary *mainInfo = [[NSBundle mainBundle] infoDictionary] ?: @{};
+    NSString *mainBundleIdentifier = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+    NSString *mainBundleVersion = mainInfo[@"CFBundleVersion"] ?: @"";
+    NSString *mainBundleShortVersion = mainInfo[@"CFBundleShortVersionString"] ?: @"";
+
+    NSString *metadataBundleIdentifier = metadata[CSKamusiMetadataBundleIdentifierKey] ?: @"";
+    NSString *metadataBundleVersion = metadata[CSKamusiMetadataBundleVersionKey] ?: @"";
+    NSString *metadataBundleShortVersion = metadata[CSKamusiMetadataBundleShortVersionKey] ?: @"";
+
+    BOOL hasBundleID = metadataBundleIdentifier.length > 0;
+    BOOL hasBuildVersion = metadataBundleVersion.length > 0;
+
+    if (!hasBundleID || !hasBuildVersion)
+        return NO;
+
+    if (![metadataBundleIdentifier isEqualToString:mainBundleIdentifier])
+        return NO;
+
+    if (![metadataBundleVersion isEqualToString:mainBundleVersion])
+        return NO;
+
+    // If metadata includes short version, require a full match as well.
+    if (metadataBundleShortVersion.length > 0 && ![metadataBundleShortVersion isEqualToString:mainBundleShortVersion])
+        return NO;
+
+    return YES;
 }
 
 #pragma mark Private API
