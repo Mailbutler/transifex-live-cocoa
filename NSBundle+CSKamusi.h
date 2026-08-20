@@ -34,6 +34,8 @@
 
 #define CSTransifexUsername     @"CSTransifexUsername"
 #define CSTransifexPassword     @"CSTransifexPassword"
+#define CSTransifexAPIToken     @"CSTransifexAPIToken"
+#define CSTransifexOrganization @"CSTransifexOrganization"
 #define CSTransifexProject      @"CSTransifexProject"
 #define CSTransifexResource     @"CSTransifexResource"
 

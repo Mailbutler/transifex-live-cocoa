@@ -34,3 +34,13 @@ Operational note:
 
 1. Older translation directories created before metadata support are intentionally ignored.
 2. After the next successful pull + install cycle on the current app version, metadata is created and translations become active again.
+3. Kamusi now forces a refresh cycle when metadata is missing or incompatible, so legacy installs can recover automatically without manual cleanup.
+
+## Transifex API authentication
+
+Kamusi uses Transifex API v3 when calling `pullTranslationsFromTransifex:`. In Shimo, these values are currently passed from hard-coded constants in `NUShimo.m`:
+
+1. `CSTransifexAPIToken`
+2. `CSTransifexOrganization`
+3. `CSTransifexProject`
+4. `CSTransifexResource`

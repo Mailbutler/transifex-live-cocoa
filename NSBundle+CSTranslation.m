@@ -57,6 +57,8 @@ static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVer
 @end
 
 static NSArray *kamusiBindingKeys = nil;
+static NSBundle *cachedKamusiBundle = nil;
+static BOOL cachedKamusiBundleResolved = NO;
 
 @implementation NSBundle (CSTranslation)
 
@@ -80,35 +82,53 @@ static NSArray *kamusiBindingKeys = nil;
 
 + (NSBundle*) kamusiBundle
 {
-    NSString* preferredLanguage = [[[NSBundle mainBundle] preferredLocalizations] firstObject];
-
-    NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:@"KamusiTranslations"];
-    if (![[self class] _csIsKamusiBundleCompatibleAtPath:kamusiPath])
-        return nil;
-
-    NSBundle* kamusiBundle = [NSBundle bundleWithPath:kamusiPath];
-
-    NSArray<NSString*>* availableKamusiLanguageCodes = [kamusiBundle localizations];
-    NSArray<NSString*>* preferredUserLocaleIdentifiers = [[NSUserDefaults standardUserDefaults] valueForKey:@"AppleLanguages"];
-
-    for(NSString* aLocaleIdentifier in preferredUserLocaleIdentifiers)
+    @synchronized(self)
     {
-        NSLocale* aLocale = [NSLocale localeWithLocaleIdentifier:aLocaleIdentifier];
+        if (cachedKamusiBundleResolved)
+            return cachedKamusiBundle;
 
-        if([availableKamusiLanguageCodes containsObject:aLocale.languageCode])
+        NSString* preferredLanguage = [[[NSBundle mainBundle] preferredLocalizations] firstObject];
+
+        NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:@"KamusiTranslations"];
+        if (![[self class] _csIsKamusiBundleCompatibleAtPath:kamusiPath])
         {
-            preferredLanguage = aLocale.languageCode;
-            break;
+            cachedKamusiBundleResolved = YES;
+            cachedKamusiBundle = nil;
+            return nil;
         }
+
+        NSBundle* kamusiBundle = [NSBundle bundleWithPath:kamusiPath];
+        if(!kamusiBundle)
+        {
+            cachedKamusiBundleResolved = YES;
+            cachedKamusiBundle = nil;
+            return nil;
+        }
+
+        NSArray<NSString*>* availableKamusiLanguageCodes = [kamusiBundle localizations];
+        NSArray<NSString*>* preferredUserLocaleIdentifiers = [[NSUserDefaults standardUserDefaults] valueForKey:@"AppleLanguages"];
+
+        for(NSString* aLocaleIdentifier in preferredUserLocaleIdentifiers)
+        {
+            NSLocale* aLocale = [NSLocale localeWithLocaleIdentifier:aLocaleIdentifier];
+            if([availableKamusiLanguageCodes containsObject:aLocale.languageCode])
+            {
+                preferredLanguage = aLocale.languageCode;
+                break;
+            }
+        }
+
+        NSString* localizationPath = [kamusiBundle pathForResource:preferredLanguage ofType:@"lproj"];
+
+        BOOL isDir = NO;
+        if([[NSFileManager defaultManager] fileExistsAtPath:localizationPath isDirectory:&isDir] && isDir)
+            cachedKamusiBundle = [NSBundle bundleWithPath:localizationPath];
+        else
+            cachedKamusiBundle = kamusiBundle;
+
+        cachedKamusiBundleResolved = YES;
+        return cachedKamusiBundle;
     }
-
-    NSString* localizationPath = [kamusiBundle pathForResource:preferredLanguage ofType:@"lproj"];
-
-    BOOL isDir = NO;
-    if([[NSFileManager defaultManager] fileExistsAtPath:localizationPath isDirectory:&isDir] && isDir)
-        return [NSBundle bundleWithPath:localizationPath];
-    else
-        return kamusiBundle;
 }
 
 - (NSString*)kamusiLocalizedStringForKey:(NSString *)key value:(NSString *)value table:(NSString *)tableName
@@ -141,10 +161,10 @@ static NSArray *kamusiBindingKeys = nil;
 
     NSString *localizedStringsTablePath_Bundle = [[NSBundle mainBundle] pathForResource:nibName ofType:@"strings"];
 
-    NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:@"KamusiTranslations"];
     NSString *localizedStringsTablePath_Kamusi = nil;
-    if ([[self class] _csIsKamusiBundleCompatibleAtPath:kamusiPath])
-        localizedStringsTablePath_Kamusi = [[NSBundle bundleWithPath:kamusiPath] pathForResource:nibName ofType:@"strings"];
+    NSBundle *kamusiBundle = [NSBundle kamusiBundle];
+    if (kamusiBundle)
+        localizedStringsTablePath_Kamusi = [kamusiBundle pathForResource:nibName ofType:@"strings"];
 
     if ((localizedStringsTablePath_Bundle || localizedStringsTablePath_Kamusi) && topLevelObjects) {
 
@@ -401,7 +421,10 @@ static NSArray *kamusiBindingKeys = nil;
     static NSString *defaultValue = @"I AM THE DEFAULT VALUE";
 
     // try with Transifex directory first
-    NSString *localizedString = [[NSBundle kamusiBundle] localizedStringForKey:string value:defaultValue table:table];
+    NSString *localizedString = defaultValue;
+    NSBundle *kamusiBundle = [NSBundle kamusiBundle];
+    if(kamusiBundle)
+        localizedString = [kamusiBundle localizedStringForKey:string value:defaultValue table:table];
 
     // backup: try with application's main bundle
     if(localizedString == defaultValue)

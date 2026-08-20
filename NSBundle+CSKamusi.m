@@ -43,23 +43,31 @@ static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVer
 
 @interface NSBundle (CSKamusi_PRIVATE)
 + (void) _pullTranslationsFromTransifex:(NSDictionary*)transifexDict withCompletionHandler:(void (^)(BOOL success))completionHandler;
++ (void) _pullTranslationsFromTransifexV3:(NSDictionary*)transifexDict withCompletionHandler:(void (^)(BOOL success))completionHandler;
++ (BOOL) _kamusiMetadataMatchesCurrentBundleAtPath:(NSString*)kamusiPath;
++ (BOOL) _kamusiStoreTranslationData:(NSData*)translationData languageCode:(NSString*)languageCode languageIdentifier:(NSString*)languageIdentifier kamusiPath:(NSString*)kamusiPath;
++ (void) _kamusiPollDownloadStatusAtURL:(NSURL*)statusURL
+                            bearerToken:(NSString*)bearerToken
+                              attemptNo:(NSUInteger)attemptNo
+                                  maxTry:(NSUInteger)maxTry
+                          withCompletion:(void (^)(NSURL *downloadURL, NSError *error))completionHandler;
 @end
 
 @implementation NSBundle (CSKamusi)
 
 + (void) pullTranslationsFromTransifex:(NSDictionary*)transifexDict withCompletionHandler:(void (^)(BOOL success))completionHandler
 {
-    // check if we have a username + password
-    if(!(transifexDict[CSTransifexUsername] && transifexDict[CSTransifexPassword]))
-    {
-        NSLog(@"ERROR: You need to specify a username+password for Transifex!");
-        return;
-    }
-
     // check if we have a project + resource
     if(!(transifexDict[CSTransifexProject] && transifexDict[CSTransifexResource]))
     {
         NSLog(@"ERROR: You need to specify a project+resource for Transifex!");
+        return;
+    }
+
+    BOOL hasV3Credentials = [transifexDict[CSTransifexAPIToken] length] > 0 && [transifexDict[CSTransifexOrganization] length] > 0;
+    if(!hasV3Credentials)
+    {
+        NSLog(@"ERROR: You need to specify apiToken+organization for Transifex API v3.");
         return;
     }
 
@@ -75,47 +83,70 @@ static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVer
 + (void) _pullTranslationsFromTransifex:(NSDictionary*)transifexDict withCompletionHandler:(void (^)(BOOL success))completionHandler
 {
     __block BOOL installedNewTranslations = NO;
-
-    // define some variables, e.g. paths
     NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:@"KamusiTranslations"];
-    NSString* authStr = [NSString stringWithFormat:@"%@:%@", transifexDict[CSTransifexUsername], transifexDict[CSTransifexPassword]];
-    NSData* authData = [authStr dataUsingEncoding:NSUTF8StringEncoding];
-    NSString* authValue = [NSString stringWithFormat:@"Basic %@", [authData base64EncodedStringWithOptions:NSDataBase64EncodingEndLineWithLineFeed]];
-    
-    NSString* urlStringStatsOverview = [NSString stringWithFormat:@"https://www.transifex.com/api/2/project/%@/resource/%@/stats/", transifexDict[CSTransifexProject], transifexDict[CSTransifexResource]];
-    NSMutableURLRequest* requestStatsOverview = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlStringStatsOverview]];
-    [requestStatsOverview setValue:authValue forHTTPHeaderField:@"Authorization"];
-    
-    [[[NSURLSession sharedSession] dataTaskWithRequest:requestStatsOverview completionHandler:^(NSData * _Nullable responseDataStatsOverview, NSURLResponse * _Nullable response, NSError * _Nullable error) {
-        
-        if(error || !responseDataStatsOverview || ![response isKindOfClass:[NSHTTPURLResponse class]] || [(NSHTTPURLResponse*)response statusCode] != 200)
+    BOOL needsMetadataRecovery = ![self _kamusiMetadataMatchesCurrentBundleAtPath:kamusiPath];
+
+    NSString *project = transifexDict[CSTransifexProject];
+    NSString *resource = transifexDict[CSTransifexResource];
+    NSString *organization = transifexDict[CSTransifexOrganization];
+    NSString *bearerToken = transifexDict[CSTransifexAPIToken];
+
+    NSString *projectIdentifier = [NSString stringWithFormat:@"o:%@:p:%@", organization, project];
+    NSString *resourceIdentifier = [NSString stringWithFormat:@"o:%@:p:%@:r:%@", organization, project, resource];
+
+    NSURLComponents *statsComponents = [NSURLComponents componentsWithString:@"https://rest.api.transifex.com/resource_language_stats"];
+    statsComponents.queryItems = @[
+        [NSURLQueryItem queryItemWithName:@"filter[project]" value:projectIdentifier],
+        [NSURLQueryItem queryItemWithName:@"filter[resource]" value:resourceIdentifier]
+    ];
+
+    NSMutableURLRequest *statsRequest = [NSMutableURLRequest requestWithURL:statsComponents.URL];
+    [statsRequest setValue:[NSString stringWithFormat:@"%@ %@", @"Bearer", bearerToken] forHTTPHeaderField:@"Authorization"];
+    [statsRequest setValue:@"application/vnd.api+json" forHTTPHeaderField:@"Accept"];
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:statsRequest completionHandler:^(NSData * _Nullable responseDataStatsOverview, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse*)response;
+        if(error || !responseDataStatsOverview || ![httpResponse isKindOfClass:[NSHTTPURLResponse class]] || httpResponse.statusCode != 200)
         {
-            NSInteger statusCode = [response isKindOfClass:[NSHTTPURLResponse class]] ? [(NSHTTPURLResponse*)response statusCode] : 0;
-            NSLog(@"Warning: Could not fetch Transifex stats overview (project=%@, resource=%@, status=%ld, error=%@)",
-                  transifexDict[CSTransifexProject],
-                  transifexDict[CSTransifexResource],
+            NSInteger statusCode = [httpResponse isKindOfClass:[NSHTTPURLResponse class]] ? httpResponse.statusCode : 0;
+            NSLog(@"Warning: Could not fetch Transifex language stats (resource=%@, status=%ld, error=%@)",
+                  resourceIdentifier,
                   (long)statusCode,
                   error.localizedDescription ?: @"none");
             if(completionHandler)
                 completionHandler(NO);
             return;
         }
-        
-        NSDictionary *allLanguageStats = [NSJSONSerialization JSONObjectWithData:responseDataStatsOverview options:kNilOptions error:nil];
-        if(![allLanguageStats isKindOfClass:[NSDictionary class]])
+
+        NSDictionary *statsPayload = [NSJSONSerialization JSONObjectWithData:responseDataStatsOverview options:kNilOptions error:nil];
+        NSArray *statsData = [statsPayload[@"data"] isKindOfClass:[NSArray class]] ? statsPayload[@"data"] : nil;
+        if(!statsData)
         {
             if(completionHandler)
                 completionHandler(NO);
             return;
         }
-        
+
+        NSMutableDictionary<NSString*, NSDictionary*> *statsByLanguageIdentifier = [[NSMutableDictionary alloc] init];
+        for(NSDictionary *entry in statsData)
+        {
+            NSString *languageID = entry[@"relationships"][@"language"][@"data"][@"id"];
+            if(![languageID hasPrefix:@"l:"])
+                continue;
+
+            NSString *normalizedLanguageID = [[languageID substringFromIndex:2] lowercaseString];
+            if([normalizedLanguageID length])
+                statsByLanguageIdentifier[normalizedLanguageID] = entry;
+        }
+
         NSDateFormatter* dateFormatter = [[NSDateFormatter alloc] init];
         dateFormatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-        [dateFormatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
-        
-        // pull translations for user languages
+        [dateFormatter setDateFormat:@"yyyy-MM-dd'T'HH:mm:ss'Z'"];
+        dateFormatter.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
+
         dispatch_group_t langDispatchGroup = dispatch_group_create();
         NSMutableSet* processedLanguageCodes = [[NSMutableSet alloc] init];
+
         for(NSString* localeIdentifier in [NSLocale preferredLanguages])
         {
             NSLocale* locale = [[NSLocale alloc] initWithLocaleIdentifier:localeIdentifier];
@@ -123,142 +154,301 @@ static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVer
             if(![languageCode length] || [processedLanguageCodes containsObject:languageCode])
                 continue;
             [processedLanguageCodes addObject:languageCode];
-            
-            NSMutableArray* candidateLanguageCodes = [[NSMutableArray alloc] init];
+
+            NSMutableArray<NSString*>* candidateLanguageCodes = [[NSMutableArray alloc] init];
             NSString* normalizedLocaleIdentifier = [[localeIdentifier stringByReplacingOccurrencesOfString:@"-" withString:@"_"] lowercaseString];
             if([normalizedLocaleIdentifier length])
                 [candidateLanguageCodes addObject:normalizedLocaleIdentifier];
             if(![candidateLanguageCodes containsObject:languageCode])
                 [candidateLanguageCodes addObject:languageCode];
-            
-            NSDictionary* languageStats = nil;
-            NSString* transifexLanguageCode = nil;
-            for(NSString* candidateLanguageCode in candidateLanguageCodes)
+
+            NSDictionary *languageStats = nil;
+            NSString *transifexLanguageIdentifier = nil;
+            for(NSString *candidateLanguageCode in candidateLanguageCodes)
             {
-                NSDictionary* candidateStats = allLanguageStats[candidateLanguageCode];
+                NSDictionary *candidateStats = statsByLanguageIdentifier[candidateLanguageCode];
                 if([candidateStats isKindOfClass:[NSDictionary class]])
                 {
                     languageStats = candidateStats;
-                    transifexLanguageCode = candidateLanguageCode;
+                    transifexLanguageIdentifier = candidateStats[@"relationships"][@"language"][@"data"][@"id"];
                     break;
                 }
             }
-            
-            if(!languageStats || ![transifexLanguageCode length])
+
+            if(!languageStats || ![transifexLanguageIdentifier hasPrefix:@"l:"])
                 continue;
-            
-            NSUInteger coverage = 0;
-            id completedValue = languageStats[@"completed"];
-            if([completedValue isKindOfClass:[NSString class]])
-                coverage = [[(NSString*)completedValue stringByReplacingOccurrencesOfString:@"%" withString:@""] integerValue];
-            else if([completedValue respondsToSelector:@selector(integerValue)])
-                coverage = [completedValue integerValue];
-            
-            if(coverage < 95)
-            {
-                // this language is not sufficiently translated, don't use it!
+
+            NSDictionary *attributes = [languageStats[@"attributes"] isKindOfClass:[NSDictionary class]] ? languageStats[@"attributes"] : nil;
+            if(!attributes)
                 continue;
-            }
-            
+
+            double totalStrings = [attributes[@"total_strings"] respondsToSelector:@selector(doubleValue)] ? [attributes[@"total_strings"] doubleValue] : 0;
+            double translatedStrings = [attributes[@"translated_strings"] respondsToSelector:@selector(doubleValue)] ? [attributes[@"translated_strings"] doubleValue] : 0;
+            if(totalStrings <= 0 || ((translatedStrings / totalStrings) * 100.0) < 95.0)
+                continue;
+
             NSString* activeLangDir = [kamusiPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.lproj", languageCode]];
-            
-            NSDate* activeLangDate;
-            NSError* fileError;
-            NSDictionary* attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:activeLangDir error:&fileError];
-            if([[NSFileManager defaultManager] fileExistsAtPath:activeLangDir] && attrs && !fileError)
-                activeLangDate = [attrs fileModificationDate];
-            
-            NSDate* lastUpdateDate;
-            NSString* lastUpdateDateString = languageStats[@"last_update"];
+            NSDictionary* activeAttrs = [[NSFileManager defaultManager] attributesOfItemAtPath:activeLangDir error:nil];
+            NSDate* activeLangDate = ([[NSFileManager defaultManager] fileExistsAtPath:activeLangDir] && activeAttrs) ? [activeAttrs fileModificationDate] : nil;
+
+            NSDate* lastUpdateDate = nil;
+            NSString* lastUpdateDateString = attributes[@"last_update"];
             if([lastUpdateDateString isKindOfClass:[NSString class]])
                 lastUpdateDate = [dateFormatter dateFromString:lastUpdateDateString];
-            
-            if(activeLangDate && (!lastUpdateDate || [lastUpdateDate timeIntervalSinceDate:activeLangDate] <= 0))
-            {
-                // localization is up-to-date or no update date available
+
+            if(!needsMetadataRecovery && activeLangDate && (!lastUpdateDate || [lastUpdateDate timeIntervalSinceDate:activeLangDate] <= 0))
                 continue;
-            }
-            
-            // now download file
+
             dispatch_group_enter(langDispatchGroup);
-            NSString* urlStringFile = [NSString stringWithFormat:@"https://www.transifex.com/api/2/project/%@/resource/%@/translation/%@/?mode=default&file", transifexDict[CSTransifexProject], transifexDict[CSTransifexResource], transifexLanguageCode];
-            NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlStringFile]];
-            [request setValue:authValue forHTTPHeaderField:@"Authorization"];
-            
-            [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData * _Nullable responseDataFile, NSURLResponse * _Nullable response, NSError * _Nullable error) {
-                
-                if(error == nil && [responseDataFile length])
-                {
-                    NSXMLDocument* xmlDoc = [[NSXMLDocument alloc] initWithData:responseDataFile options:0 error:&error];
-                    
-                    if(error == nil)
-                    {
-                        NSArray* fileElements = [xmlDoc.rootElement nodesForXPath:@"//file" error:&error];
-                        for(NSXMLElement* aFileElement in fileElements)
-                        {
-                            NSString* fileName = [[[[aFileElement attributeForName:@"original"] stringValue] lastPathComponent] stringByDeletingPathExtension];
-                            BOOL isSourceLang = [[[aFileElement attributeForName:@"source-language"] stringValue] isEqualToString:transifexLanguageCode];
-                            
-                            // get translated strings
-                            NSMutableString* strings = [NSMutableString stringWithCapacity:5000];
-                            
-                            NSXMLElement* bodyElement = [[aFileElement nodesForXPath:@"body" error:nil] firstObject];
-                            NSArray* translationItemList = [bodyElement nodesForXPath:@"trans-unit" error:nil];
-                            for(NSXMLElement* aTranslation in translationItemList)
-                            {
-                                NSString* transID = [[aTranslation attributeForName:@"id"] stringValue];
-                                
-                                if(!transID)
-                                    continue;
-                                
-                                NSXMLElement* targetItem = [[aTranslation nodesForXPath:@"target" error:nil] firstObject];
-                                
-                                // if source language, use source string instead
-                                if(isSourceLang && targetItem == nil)
-                                    targetItem = [[aTranslation nodesForXPath:@"source" error:nil] firstObject];
-                                
-                                NSString* translationString = [targetItem stringValue];
-                                
-                                if(!translationString)
-                                    continue;
-                                
-                                NSString* translationLine = [NSString stringWithFormat:@"\"%@\" = \"%@\";\n", transID, translationString];
-                                
-                                [strings appendString:translationLine];
+
+            NSDictionary *payload = @{
+                @"data": @{
+                    @"type": @"resource_translations_async_downloads",
+                    @"attributes": @{
+                        @"file_type": @"default",
+                        @"mode": @"default"
+                    },
+                    @"relationships": @{
+                        @"resource": @{
+                            @"data": @{
+                                @"type": @"resources",
+                                @"id": resourceIdentifier
                             }
-                            
-                            // write strings file to temporary directory
-                            NSString* tempLangDir = [kamusiPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.lproj_new", languageCode]];
-                            
-                            BOOL isDir = NO;
-                            if(!([[NSFileManager defaultManager] fileExistsAtPath:tempLangDir isDirectory:&isDir] && isDir))
-                                [[NSFileManager defaultManager] createDirectoryAtPath:tempLangDir withIntermediateDirectories:YES attributes:nil error:nil];
-                            
-                            NSString* stringFileName = [fileName stringByAppendingPathExtension:@"strings"];
-                            NSString* stringFilePath = [tempLangDir stringByAppendingPathComponent:stringFileName];
-                            
-                            if([[NSFileManager defaultManager] fileExistsAtPath:stringFilePath])
-                                [[NSFileManager defaultManager] removeItemAtPath:stringFilePath error:nil];
-                            
-                            if([strings length] > 20)
-                                installedNewTranslations |= [strings writeToFile:stringFilePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                        },
+                        @"language": @{
+                            @"data": @{
+                                @"type": @"languages",
+                                @"id": transifexLanguageIdentifier
+                            }
                         }
                     }
                 }
-                
-                dispatch_group_leave(langDispatchGroup);
-                
+            };
+
+            NSMutableURLRequest *downloadRequest = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://rest.api.transifex.com/resource_translations_async_downloads"]];
+            downloadRequest.HTTPMethod = @"POST";
+            [downloadRequest setValue:[NSString stringWithFormat:@"%@ %@", @"Bearer", bearerToken] forHTTPHeaderField:@"Authorization"];
+            [downloadRequest setValue:@"application/vnd.api+json" forHTTPHeaderField:@"Accept"];
+            [downloadRequest setValue:@"application/vnd.api+json" forHTTPHeaderField:@"Content-Type"];
+            downloadRequest.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+
+            [[[NSURLSession sharedSession] dataTaskWithRequest:downloadRequest completionHandler:^(NSData * _Nullable responseData, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+                NSHTTPURLResponse *createResponse = (NSHTTPURLResponse*)response;
+                if(error || ![createResponse isKindOfClass:[NSHTTPURLResponse class]] || createResponse.statusCode != 202)
+                {
+                    dispatch_group_leave(langDispatchGroup);
+                    return;
+                }
+
+                NSString *statusLocation = createResponse.allHeaderFields[@"Content-Location"];
+                if(![statusLocation isKindOfClass:[NSString class]] || ![statusLocation length])
+                {
+                    dispatch_group_leave(langDispatchGroup);
+                    return;
+                }
+
+                NSURL *statusURL = [NSURL URLWithString:statusLocation];
+                if(!statusURL.scheme)
+                    statusURL = [NSURL URLWithString:[NSString stringWithFormat:@"https://rest.api.transifex.com%@", statusLocation]];
+                if(!statusURL)
+                {
+                    dispatch_group_leave(langDispatchGroup);
+                    return;
+                }
+
+                [self _kamusiPollDownloadStatusAtURL:statusURL bearerToken:bearerToken attemptNo:0 maxTry:20 withCompletion:^(NSURL *downloadURL, NSError *pollError) {
+                    if(pollError || !downloadURL)
+                    {
+                        dispatch_group_leave(langDispatchGroup);
+                        return;
+                    }
+
+                    [[[NSURLSession sharedSession] dataTaskWithURL:downloadURL completionHandler:^(NSData * _Nullable translationData, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+                        if(!error && [translationData length] > 0)
+                        {
+                            BOOL stored = [self _kamusiStoreTranslationData:translationData languageCode:languageCode languageIdentifier:[transifexLanguageIdentifier substringFromIndex:2] kamusiPath:kamusiPath];
+                            if(stored)
+                            {
+                                @synchronized(self) {
+                                    installedNewTranslations = YES;
+                                }
+                            }
+                        }
+                        dispatch_group_leave(langDispatchGroup);
+                    }] resume];
+                }];
             }] resume];
         }
-        
+
         dispatch_group_notify(langDispatchGroup, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            
             if(completionHandler)
                 completionHandler(installedNewTranslations);
         });
-        
     }] resume];
+}
 
++ (BOOL)_kamusiMetadataMatchesCurrentBundleAtPath:(NSString*)kamusiPath
+{
+    NSString *metadataPath = [kamusiPath stringByAppendingPathComponent:CSKamusiMetadataFileName];
+    NSDictionary *metadata = [NSDictionary dictionaryWithContentsOfFile:metadataPath];
+    if(![metadata isKindOfClass:[NSDictionary class]])
+        return NO;
+
+    NSDictionary *mainInfo = [[NSBundle mainBundle] infoDictionary] ?: @{};
+    NSString *mainBundleIdentifier = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+    NSString *mainBundleVersion = mainInfo[@"CFBundleVersion"] ?: @"";
+    NSString *mainBundleShortVersion = mainInfo[@"CFBundleShortVersionString"] ?: @"";
+
+    NSString *metadataBundleIdentifier = metadata[CSKamusiMetadataBundleIdentifierKey] ?: @"";
+    NSString *metadataBundleVersion = metadata[CSKamusiMetadataBundleVersionKey] ?: @"";
+    NSString *metadataBundleShortVersion = metadata[CSKamusiMetadataBundleShortVersionKey] ?: @"";
+
+    if(![metadataBundleIdentifier length] || ![metadataBundleVersion length])
+        return NO;
+
+    if(![metadataBundleIdentifier isEqualToString:mainBundleIdentifier])
+        return NO;
+
+    if(![metadataBundleVersion isEqualToString:mainBundleVersion])
+        return NO;
+
+    if([metadataBundleShortVersion length] > 0 && ![metadataBundleShortVersion isEqualToString:mainBundleShortVersion])
+        return NO;
+
+    return YES;
+}
+
++ (void) _kamusiPollDownloadStatusAtURL:(NSURL*)statusURL
+                            bearerToken:(NSString*)bearerToken
+                              attemptNo:(NSUInteger)attemptNo
+                                  maxTry:(NSUInteger)maxTry
+                          withCompletion:(void (^)(NSURL *downloadURL, NSError *error))completionHandler
+{
+    NSMutableURLRequest *statusRequest = [NSMutableURLRequest requestWithURL:statusURL];
+    [statusRequest setValue:[NSString stringWithFormat:@"%@ %@", @"Bearer", bearerToken] forHTTPHeaderField:@"Authorization"];
+    [statusRequest setValue:@"application/vnd.api+json" forHTTPHeaderField:@"Accept"];
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:statusRequest completionHandler:^(NSData * _Nullable responseData, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+        NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse*)response;
+        if(error || ![httpResponse isKindOfClass:[NSHTTPURLResponse class]])
+        {
+            if(completionHandler)
+                completionHandler(nil, error);
+            return;
+        }
+
+        if(httpResponse.statusCode == 303)
+        {
+            NSString *downloadLocation = httpResponse.allHeaderFields[@"Location"];
+            NSURL *downloadURL = [downloadLocation isKindOfClass:[NSString class]] ? [NSURL URLWithString:downloadLocation] : nil;
+            if(completionHandler)
+                completionHandler(downloadURL, downloadURL ? nil : [NSError errorWithDomain:@"CSKamusi" code:303 userInfo:nil]);
+            return;
+        }
+
+        if(httpResponse.statusCode != 200 || ![responseData length])
+        {
+            if(completionHandler)
+                completionHandler(nil, [NSError errorWithDomain:@"CSKamusi" code:httpResponse.statusCode userInfo:nil]);
+            return;
+        }
+
+        NSError *statusParseError = nil;
+        NSDictionary *statusPayload = [NSJSONSerialization JSONObjectWithData:responseData options:kNilOptions error:&statusParseError];
+        if(![statusPayload isKindOfClass:[NSDictionary class]])
+        {
+            // Some URLSession configurations follow the 303 automatically and return the final file URL/contents here.
+            NSURL *finalURL = [response URL];
+            if(finalURL && ![[finalURL absoluteString] isEqualToString:[statusURL absoluteString]])
+            {
+                if(completionHandler)
+                    completionHandler(finalURL, nil);
+                return;
+            }
+
+            if(completionHandler)
+                completionHandler(nil, statusParseError ?: [NSError errorWithDomain:@"CSKamusi" code:-4 userInfo:nil]);
+            return;
+        }
+
+        NSString *status = statusPayload[@"data"][@"attributes"][@"status"];
+        if([status isEqualToString:@"failed"])
+        {
+            if(completionHandler)
+                completionHandler(nil, [NSError errorWithDomain:@"CSKamusi" code:-2 userInfo:nil]);
+            return;
+        }
+
+        if((!status || [status isEqualToString:@"pending"] || [status isEqualToString:@"processing"]) && attemptNo + 1 < maxTry)
+        {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                [self _kamusiPollDownloadStatusAtURL:statusURL bearerToken:bearerToken attemptNo:attemptNo + 1 maxTry:maxTry withCompletion:completionHandler];
+            });
+            return;
+        }
+
+        if(completionHandler)
+            completionHandler(nil, [NSError errorWithDomain:@"CSKamusi" code:-3 userInfo:nil]);
+    }] resume];
+}
+
++ (BOOL) _kamusiStoreTranslationData:(NSData*)translationData languageCode:(NSString*)languageCode languageIdentifier:(NSString*)languageIdentifier kamusiPath:(NSString*)kamusiPath
+{
+    NSError *error = nil;
+    NSXMLDocument* xmlDoc = [[NSXMLDocument alloc] initWithData:translationData options:0 error:&error];
+    if(error != nil || !xmlDoc)
+        return NO;
+
+    BOOL installedAnyStrings = NO;
+    NSArray* fileElements = [xmlDoc.rootElement nodesForXPath:@"//file" error:&error];
+    if(error != nil)
+        return NO;
+
+    for(NSXMLElement* aFileElement in fileElements)
+    {
+        NSString* fileName = [[[[aFileElement attributeForName:@"original"] stringValue] lastPathComponent] stringByDeletingPathExtension];
+        BOOL isSourceLang = [[[aFileElement attributeForName:@"source-language"] stringValue] isEqualToString:languageIdentifier];
+
+        NSMutableString* strings = [NSMutableString stringWithCapacity:5000];
+        NSXMLElement* bodyElement = [[aFileElement nodesForXPath:@"body" error:nil] firstObject];
+        NSArray* translationItemList = [bodyElement nodesForXPath:@"trans-unit" error:nil];
+        for(NSXMLElement* aTranslation in translationItemList)
+        {
+            NSString* transID = [[aTranslation attributeForName:@"id"] stringValue];
+            if(!transID)
+                continue;
+
+            NSXMLElement* targetItem = [[aTranslation nodesForXPath:@"target" error:nil] firstObject];
+            if(isSourceLang && targetItem == nil)
+                targetItem = [[aTranslation nodesForXPath:@"source" error:nil] firstObject];
+
+            NSString* translationString = [targetItem stringValue];
+            if(!translationString)
+                continue;
+
+            NSString *escapedTranslationString = [[translationString stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"]
+                                                  stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+            escapedTranslationString = [escapedTranslationString stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
+            NSString* translationLine = [NSString stringWithFormat:@"\"%@\" = \"%@\";\n", transID, escapedTranslationString];
+            [strings appendString:translationLine];
+        }
+
+        NSString* tempLangDir = [kamusiPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.lproj_new", languageCode]];
+        BOOL isDir = NO;
+        if(!([[NSFileManager defaultManager] fileExistsAtPath:tempLangDir isDirectory:&isDir] && isDir))
+            [[NSFileManager defaultManager] createDirectoryAtPath:tempLangDir withIntermediateDirectories:YES attributes:nil error:nil];
+
+        NSString* stringFileName = [fileName stringByAppendingPathExtension:@"strings"];
+        NSString* stringFilePath = [tempLangDir stringByAppendingPathComponent:stringFileName];
+
+        if([[NSFileManager defaultManager] fileExistsAtPath:stringFilePath])
+            [[NSFileManager defaultManager] removeItemAtPath:stringFilePath error:nil];
+
+        if([strings length] > 20)
+            installedAnyStrings |= [strings writeToFile:stringFilePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+
+    return installedAnyStrings;
 }
 
 + (BOOL) installTranslations
