@@ -40,6 +40,7 @@ static NSString * const CSKamusiMetadataFileName = @"Metadata.plist";
 static NSString * const CSKamusiMetadataBundleIdentifierKey = @"BundleIdentifier";
 static NSString * const CSKamusiMetadataBundleVersionKey = @"BundleVersion";
 static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVersion";
+static NSString * const CSKamusiTranslationsDirectoryName = @"KamusiTranslations";
 
 @interface NSBundle (CSTranslation_Private)
 + (void)_csLocalizeStringsInObject:(id)object table:(NSString *)table;
@@ -89,8 +90,16 @@ static BOOL cachedKamusiBundleResolved = NO;
 
         NSString* preferredLanguage = [[[NSBundle mainBundle] preferredLocalizations] firstObject];
 
-        NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:@"KamusiTranslations"];
-        if (![[self class] _csIsKamusiBundleCompatibleAtPath:kamusiPath])
+        NSString* applicationSupportKamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:CSKamusiTranslationsDirectoryName];
+        NSString* bundledKamusiPath = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:CSKamusiTranslationsDirectoryName];
+
+        NSString* kamusiPath = nil;
+        if([[self class] _csIsKamusiBundleCompatibleAtPath:applicationSupportKamusiPath])
+            kamusiPath = applicationSupportKamusiPath;
+        else if([[self class] _csIsKamusiBundleCompatibleAtPath:bundledKamusiPath])
+            kamusiPath = bundledKamusiPath;
+
+        if(!kamusiPath)
         {
             cachedKamusiBundleResolved = YES;
             cachedKamusiBundle = nil;

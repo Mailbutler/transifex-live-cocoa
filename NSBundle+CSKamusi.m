@@ -40,11 +40,13 @@ static NSString * const CSKamusiMetadataFileName = @"Metadata.plist";
 static NSString * const CSKamusiMetadataBundleIdentifierKey = @"BundleIdentifier";
 static NSString * const CSKamusiMetadataBundleVersionKey = @"BundleVersion";
 static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVersion";
+static NSString * const CSKamusiTranslationsDirectoryName = @"KamusiTranslations";
 
 @interface NSBundle (CSKamusi_PRIVATE)
 + (void) _pullTranslationsFromTransifex:(NSDictionary*)transifexDict withCompletionHandler:(void (^)(BOOL success))completionHandler;
 + (void) _pullTranslationsFromTransifexV3:(NSDictionary*)transifexDict withCompletionHandler:(void (^)(BOOL success))completionHandler;
 + (BOOL) _kamusiMetadataMatchesCurrentBundleAtPath:(NSString*)kamusiPath;
++ (NSDate*) _kamusiLanguageDirectoryModificationDateForLanguageCode:(NSString*)languageCode kamusiPath:(NSString*)kamusiPath;
 + (BOOL) _kamusiStoreTranslationData:(NSData*)translationData languageCode:(NSString*)languageCode languageIdentifier:(NSString*)languageIdentifier kamusiPath:(NSString*)kamusiPath;
 + (void) _kamusiPollDownloadStatusAtURL:(NSURL*)statusURL
                             bearerToken:(NSString*)bearerToken
@@ -83,8 +85,11 @@ static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVer
 + (void) _pullTranslationsFromTransifex:(NSDictionary*)transifexDict withCompletionHandler:(void (^)(BOOL success))completionHandler
 {
     __block BOOL installedNewTranslations = NO;
-    NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:@"KamusiTranslations"];
-    BOOL needsMetadataRecovery = ![self _kamusiMetadataMatchesCurrentBundleAtPath:kamusiPath];
+    NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:CSKamusiTranslationsDirectoryName];
+    NSString* bundledKamusiPath = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:CSKamusiTranslationsDirectoryName];
+    BOOL hasCompatibleInstalledTranslations = [self _kamusiMetadataMatchesCurrentBundleAtPath:kamusiPath];
+    BOOL hasCompatibleBundledTranslations = [self _kamusiMetadataMatchesCurrentBundleAtPath:bundledKamusiPath];
+    BOOL needsMetadataRecovery = !(hasCompatibleInstalledTranslations || hasCompatibleBundledTranslations);
 
     NSString *project = transifexDict[CSTransifexProject];
     NSString *resource = transifexDict[CSTransifexResource];
@@ -187,9 +192,11 @@ static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVer
             if(totalStrings <= 0 || ((translatedStrings / totalStrings) * 100.0) < 95.0)
                 continue;
 
-            NSString* activeLangDir = [kamusiPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.lproj", languageCode]];
-            NSDictionary* activeAttrs = [[NSFileManager defaultManager] attributesOfItemAtPath:activeLangDir error:nil];
-            NSDate* activeLangDate = ([[NSFileManager defaultManager] fileExistsAtPath:activeLangDir] && activeAttrs) ? [activeAttrs fileModificationDate] : nil;
+            NSDate* installedLangDate = hasCompatibleInstalledTranslations ? [self _kamusiLanguageDirectoryModificationDateForLanguageCode:languageCode kamusiPath:kamusiPath] : nil;
+            NSDate* bundledLangDate = hasCompatibleBundledTranslations ? [self _kamusiLanguageDirectoryModificationDateForLanguageCode:languageCode kamusiPath:bundledKamusiPath] : nil;
+            NSDate* activeLangDate = installedLangDate;
+            if(bundledLangDate && (!activeLangDate || [bundledLangDate timeIntervalSinceDate:activeLangDate] > 0))
+                activeLangDate = bundledLangDate;
 
             NSDate* lastUpdateDate = nil;
             NSString* lastUpdateDateString = attributes[@"last_update"];
@@ -316,6 +323,16 @@ static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVer
         return NO;
 
     return YES;
+}
+
++ (NSDate*) _kamusiLanguageDirectoryModificationDateForLanguageCode:(NSString*)languageCode kamusiPath:(NSString*)kamusiPath
+{
+    NSString* activeLangDir = [kamusiPath stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.lproj", languageCode]];
+    NSDictionary* activeAttrs = [[NSFileManager defaultManager] attributesOfItemAtPath:activeLangDir error:nil];
+    if([[NSFileManager defaultManager] fileExistsAtPath:activeLangDir] && activeAttrs)
+        return [activeAttrs fileModificationDate];
+
+    return nil;
 }
 
 + (void) _kamusiPollDownloadStatusAtURL:(NSURL*)statusURL
@@ -453,7 +470,7 @@ static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVer
 
 + (BOOL) installTranslations
 {
-    NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:@"KamusiTranslations"];
+    NSString* kamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:CSKamusiTranslationsDirectoryName];
 
     NSError* error;
     BOOL installed = NO;

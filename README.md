@@ -38,7 +38,7 @@ Operational note:
 
 ## Transifex API authentication
 
-Kamusi uses Transifex API v3 when calling `pullTranslationsFromTransifex:`. In Shimo, these values are currently passed from hard-coded constants in `NUShimo.m`:
+Kamusi uses Transifex API v3 when calling `pullTranslationsFromTransifex:`. Host applications provide these values in the configuration dictionary:
 
 1. `CSTransifexAPIToken`
 2. `CSTransifexOrganization`
