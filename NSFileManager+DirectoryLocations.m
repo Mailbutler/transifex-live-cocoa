@@ -51,47 +51,39 @@ NSString * const DirectoryLocationDomain = @"DirectoryLocationDomain";
 //
 - (NSString *)findOrCreateDirectory:(NSSearchPathDirectory)searchPathDirectory inDomain:(NSSearchPathDomainMask)domainMask appendPathComponent:(NSString *)appendComponent error:(NSError **)errorOut
 {
-	//
-	// Search for the path
-	//
-	NSArray* paths = NSSearchPathForDirectoriesInDomains(searchPathDirectory, domainMask, YES);
-	if ([paths count] == 0)
-	{
-		if (errorOut)
-		{
-			NSDictionary *userInfo = @{NSLocalizedDescriptionKey:@"No path found for directory in domain.", @"NSSearchPathDirectory": @(searchPathDirectory), @"NSSearchPathDomainMask": @(domainMask)};
-			
+    NSError *error = nil;
+    NSURL *baseDirectoryURL = [self URLForDirectory:searchPathDirectory
+                                           inDomain:domainMask
+                                  appropriateForURL:nil
+                                             create:YES
+                                              error:&error];
+    if (!baseDirectoryURL)
+    {
+        if (errorOut)
+        {
+            NSMutableDictionary *userInfo = [@{
+                NSLocalizedDescriptionKey: @"No path found for directory in domain.",
+                @"NSSearchPathDirectory": @(searchPathDirectory),
+                @"NSSearchPathDomainMask": @(domainMask)
+            } mutableCopy];
+            if (error)
+                userInfo[NSUnderlyingErrorKey] = error;
             *errorOut = [NSError errorWithDomain:DirectoryLocationDomain code:DirectoryLocationErrorNoPathFound userInfo:userInfo];
-		}
-		return nil;
-	}
-	
-	//
-	// Normally only need the first path returned
-	//
-	NSString *resolvedPath = [paths firstObject];
+        }
+        return nil;
+    }
 
-	//
-	// Append the extra path component
-	//
-	if (appendComponent)
-	{
-		resolvedPath = [resolvedPath stringByAppendingPathComponent:appendComponent];
-	}
-	
-	//
-	// Create the path if it doesn't exist
-	//
-	NSError *error = nil;
-	BOOL success = [self createDirectoryAtPath:resolvedPath withIntermediateDirectories:YES attributes:nil error:&error];
-	if (!success) 
-	{
-		if (errorOut)
-		{
-			*errorOut = error;
-		}
-		return nil;
-	}
+    NSURL *resolvedDirectoryURL = baseDirectoryURL;
+    if ([appendComponent length] > 0)
+        resolvedDirectoryURL = [baseDirectoryURL URLByAppendingPathComponent:appendComponent isDirectory:YES];
+
+    BOOL success = [self createDirectoryAtURL:resolvedDirectoryURL withIntermediateDirectories:YES attributes:nil error:&error];
+    if (!success)
+    {
+        if (errorOut)
+            *errorOut = error;
+        return nil;
+    }
 	
 	//
 	// If we've made it this far, we have a success
@@ -100,7 +92,7 @@ NSString * const DirectoryLocationDomain = @"DirectoryLocationDomain";
 	{
 		*errorOut = nil;
 	}
-	return resolvedPath;
+	return [resolvedDirectoryURL path];
 }
 
 //
