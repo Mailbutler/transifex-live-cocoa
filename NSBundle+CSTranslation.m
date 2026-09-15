@@ -88,7 +88,7 @@ static BOOL cachedKamusiBundleResolved = NO;
         if (cachedKamusiBundleResolved)
             return cachedKamusiBundle;
 
-        NSString* preferredLanguage = [[[NSBundle mainBundle] preferredLocalizations] firstObject];
+        NSString* preferredLanguage = nil;
 
         NSString* applicationSupportKamusiPath = [[[NSFileManager defaultManager] applicationSupportDirectory] stringByAppendingPathComponent:CSKamusiTranslationsDirectoryName];
         NSString* bundledKamusiPath = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:CSKamusiTranslationsDirectoryName];
@@ -117,14 +117,28 @@ static BOOL cachedKamusiBundleResolved = NO;
         NSArray<NSString*>* availableKamusiLanguageCodes = [kamusiBundle localizations];
         NSArray<NSString*>* preferredUserLocaleIdentifiers = [[NSUserDefaults standardUserDefaults] valueForKey:@"AppleLanguages"];
 
+        BOOL foundMatchingKamusiLanguage = NO;
         for(NSString* aLocaleIdentifier in preferredUserLocaleIdentifiers)
         {
             NSLocale* aLocale = [NSLocale localeWithLocaleIdentifier:aLocaleIdentifier];
             if([availableKamusiLanguageCodes containsObject:aLocale.languageCode])
             {
                 preferredLanguage = aLocale.languageCode;
+                foundMatchingKamusiLanguage = YES;
                 break;
             }
+        }
+
+        // English is the app's development language, so it is never bundled by Kamusi. If none of the
+        // user's preferred languages matches an available Kamusi localization, do NOT fall back to the
+        // un-narrowed, multi-language Kamusi bundle: it has no CFBundleDevelopmentRegion of its own, so
+        // Foundation's own (implementation-defined) fallback logic could pick an arbitrary bundled
+        // language (e.g. German) instead of the user's expected English. Returning nil here makes
+        // callers fall through to the app's own (English) strings/nibs instead.
+        if (!foundMatchingKamusiLanguage) {
+            cachedKamusiBundleResolved = YES;
+            cachedKamusiBundle = nil;
+            return nil;
         }
 
         NSString* localizationPath = [kamusiBundle pathForResource:preferredLanguage ofType:@"lproj"];
@@ -133,7 +147,7 @@ static BOOL cachedKamusiBundleResolved = NO;
         if([[NSFileManager defaultManager] fileExistsAtPath:localizationPath isDirectory:&isDir] && isDir)
             cachedKamusiBundle = [NSBundle bundleWithPath:localizationPath];
         else
-            cachedKamusiBundle = kamusiBundle;
+            cachedKamusiBundle = nil;
 
         cachedKamusiBundleResolved = YES;
         return cachedKamusiBundle;

@@ -42,6 +42,11 @@ static NSString * const CSKamusiMetadataBundleVersionKey = @"BundleVersion";
 static NSString * const CSKamusiMetadataBundleShortVersionKey = @"BundleShortVersion";
 static NSString * const CSKamusiTranslationsDirectoryName = @"KamusiTranslations";
 
+// English is the app's development language: its strings/nibs are already built into the app, and
+// Transifex structurally rejects translation downloads for the source language (409, no
+// Content-Location). Kamusi must never attempt to fetch/store/select it at runtime.
+static NSString* const CSKamusiSourceLanguageCode = @"en";
+
 @interface NSBundle (CSKamusi_PRIVATE)
 + (void) _pullTranslationsFromTransifex:(NSDictionary*)transifexDict withCompletionHandler:(void (^)(BOOL success))completionHandler;
 + (void) _pullTranslationsFromTransifexV3:(NSDictionary*)transifexDict withCompletionHandler:(void (^)(BOOL success))completionHandler;
@@ -159,6 +164,9 @@ static NSString * const CSKamusiTranslationsDirectoryName = @"KamusiTranslations
             if(![languageCode length] || [processedLanguageCodes containsObject:languageCode])
                 continue;
             [processedLanguageCodes addObject:languageCode];
+
+            if ([languageCode isEqualToString:CSKamusiSourceLanguageCode])
+                continue;    // never fetch the source language; the app's own strings/nibs already have it
 
             NSMutableArray<NSString*>* candidateLanguageCodes = [[NSMutableArray alloc] init];
             NSString* normalizedLocaleIdentifier = [[localeIdentifier stringByReplacingOccurrencesOfString:@"-" withString:@"_"] lowercaseString];
