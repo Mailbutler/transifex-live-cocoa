@@ -168,6 +168,19 @@ NSString* const CSKamusiSourceLanguageCode = @"en";
             if ([languageCode isEqualToString:CSKamusiSourceLanguageCode])
                 continue;    // never fetch the source language; the app's own strings/nibs already have it
 
+            // NOTE: a regional identifier (e.g. "fr_ca") is tried first so a locale-specific Transifex
+            // language, if one exists, is preferred over the generic base-language one. However, the
+            // downloaded translations are always stored under the bare base language code below (see
+            // languageCode passed to _kamusiStoreTranslationData:), i.e. into "fr.lproj" rather than a
+            // distinct "fr_CA.lproj". That means at most one regional variant of a given language can be
+            // installed at a time: if Transifex ever hosts multiple regional variants of the same
+            // language (e.g. both "fr_CA" and "fr_FR"), they will collide in the same .lproj directory
+            // and whichever was fetched most recently wins for all regional variants of that language.
+            // Not an issue today since the Transifex project has no regional-variant languages, but if
+            // that changes, this loop and the storage/selection logic (_kamusiStoreTranslationData:,
+            // _kamusiLanguageDirectoryModificationDateForLanguageCode:, and +kamusiBundle's selection
+            // loop in NSBundle+CSTranslation.m) would need to be extended to keep regional variants in
+            // their own .lproj directories and to prefer an exact regional match during selection.
             NSMutableArray<NSString*>* candidateLanguageCodes = [[NSMutableArray alloc] init];
             NSString* normalizedLocaleIdentifier = [[localeIdentifier stringByReplacingOccurrencesOfString:@"-" withString:@"_"] lowercaseString];
             if([normalizedLocaleIdentifier length])
