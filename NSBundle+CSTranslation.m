@@ -32,6 +32,7 @@
 
 #import "NSBundle+CSTranslation.h"
 
+#import "NSBundle+CSKamusi.h"
 #import "NSFileManager+DirectoryLocations.h"
 
 #import <objc/runtime.h>
@@ -121,6 +122,15 @@ static BOOL cachedKamusiBundleResolved = NO;
         for(NSString* aLocaleIdentifier in preferredUserLocaleIdentifiers)
         {
             NSLocale* aLocale = [NSLocale localeWithLocaleIdentifier:aLocaleIdentifier];
+
+            // English is never present in availableKamusiLanguageCodes (see above), so without this
+            // check the loop would silently skip over it and keep scanning for a match among *lower*
+            // priority languages (e.g. a secondary system language) instead of stopping here. That
+            // previously caused users whose top preference was English to see a lower-priority
+            // language (e.g. French, German) instead of the app's own English strings/nibs.
+            if ([aLocale.languageCode isEqualToString:CSKamusiSourceLanguageCode])
+                break;
+
             if([availableKamusiLanguageCodes containsObject:aLocale.languageCode])
             {
                 preferredLanguage = aLocale.languageCode;
